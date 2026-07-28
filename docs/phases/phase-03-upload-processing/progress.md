@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 3/10 completed
+**SIs:** 4/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -35,9 +35,15 @@
   - `getPresignedPartUrls`/`getPresignedGetUrl` default to a 1-hour presigned URL expiry (`STORAGE_DEFAULTS.PRESIGNED_URL_EXPIRES_IN_SECONDS` in `storage.constants.ts`) — not specified by any TD; chosen as a reasonable default consistent with TD-04's resumability model (expired part URLs are simply re-requested).
 
 ### SI-03.4 — Queue Module (produtor RabbitMQ)
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 3 passing
+- **Observations:**
+  - `TD-01`'s recommendation names `amqp-connection-manager`/`amqplib` directly (not `@nestjs/microservices`' RMQ transport), matching what was already pinned in SI-03.1 (`amqp-connection-manager@^5.0.0`, `amqplib@^2.0.1`). Verified the current v5/v2 API via WebSearch + reading the installed packages' own `.d.ts`/compiled JS directly (context7 still unavailable, same gap noted since SI-03.1) — v5 introduced no breaking API changes over v4 besides a Node ≥20 floor.
+  - The SI's technical action literally names the queue `video.processing.requested`, but `queue.config.ts` (from SI-03.1) already defines `videoProcessingQueue` with a different default (`video-processing`). Treated the config value as the source of truth (the action's prose is naming the semantic event from the Events/Messages spec, not mandating a literal override) — the AC itself says "publica...na fila configurada", i.e. config-driven. Not touching SI-03.1's config default is a scope decision, not an oversight.
+  - Dead-letter topology (`<queue>.dlx` direct exchange + `<queue>.dlq` queue, bound and wired via `deadLetterExchange`/`deadLetterRoutingKey` on the main queue's `assertQueue`) isn't specified by name anywhere in the plan/TDs — chose a `.dlx`/`.dlq` suffix convention (`queue.constants.ts`) since no naming convention existed to follow.
+  - `QueueService.onModuleInit` explicitly awaits `channelWrapper.waitForConnect()` (not just fire-and-forget `amqp.connect`) so the durable-queue+DLQ topology is guaranteed asserted before the module is considered initialized — matters because `publishVideoProcessingRequested` will be called from SI-03.6's upload-complete flow and topology errors should surface at boot, not silently on first publish.
+  - AC2 ("ao reiniciar a conexão, mensagens não confirmadas permanecem na fila") and AC3 ("mensagem rejeitada é roteada à DLQ") aren't covered by the SI's single named test file by 1:1 mapping, but both are exercised as additional `it()` blocks in that same file, per the skill's "every AC should be observable from at least one test" rule — no new file needed since both are real assertions on the same `QueueService` instance.
+  - First test design reused one long-lived AMQP channel across all 3 tests (consume + cancel per assertion) and consistently hung at Jest's 5000ms timeout on the 2nd/3rd test — root-caused via WebSearch + reading `amqp-connection-manager`'s compiled source that repeated `consume()`/`cancel()` cycles on the same `ChannelWrapper` don't reliably re-arm; fixed by giving each assertion its own short-lived connection+channel (`receiveOne` helper), closed immediately after use — no flakiness since.
 
 ### SI-03.5 — Endpoint POST /videos (criação de rascunho + início do upload)
 - **Status:** pending
