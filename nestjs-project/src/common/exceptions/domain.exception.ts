@@ -54,3 +54,29 @@ export class FileTooLargeException extends DomainException {
     super('FILE_TOO_LARGE', 413, 'File size exceeds the 10GB upload limit');
   }
 }
+
+export class VideoNotFoundException extends DomainException {
+  constructor() {
+    super('VIDEO_NOT_FOUND', 404, 'Video not found');
+  }
+}
+
+export class UploadAlreadyCompletedException extends DomainException {
+  constructor() {
+    super(
+      'UPLOAD_ALREADY_COMPLETED',
+      409,
+      'Upload has already been completed or aborted',
+    );
+  }
+}
+
+export class InvalidUploadPartsException extends DomainException {
+  constructor() {
+    super(
+      'INVALID_UPLOAD_PARTS',
+      400,
+      'Upload parts are missing or inconsistent with the multipart session',
+    );
+  }
+}

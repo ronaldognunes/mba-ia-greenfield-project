@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import { FileTooLargeException } from '../common/exceptions/domain.exception';
+import { QueueService } from '../queue/queue.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { Video } from './entities/video.entity';
@@ -36,7 +37,10 @@ describe('VideosService', () => {
   const storageServiceMock = {
     createMultipartUpload: jest.fn(),
     getPresignedPartUrls: jest.fn(),
+    completeMultipartUpload: jest.fn(),
+    abortMultipartUpload: jest.fn(),
   };
+  const queueServiceMock = { publishVideoProcessingRequested: jest.fn() };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -48,6 +52,7 @@ describe('VideosService', () => {
         { provide: getRepositoryToken(Video), useValue: videoRepositoryMock },
         { provide: ChannelsService, useValue: channelsServiceMock },
         { provide: StorageService, useValue: storageServiceMock },
+        { provide: QueueService, useValue: queueServiceMock },
       ],
     }).compile();
 

@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 5/10 completed
+**SIs:** 6/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -58,9 +58,17 @@
   - Discovered the project's `npm run lint` has pre-existing failures (mostly `@typescript-eslint/no-unsafe-*` and `unbound-method`) across phase-02 files this SI never touched (`auth.e2e-spec.ts`, `auth.service.spec.ts`, `auth.service.integration-spec.ts`, `users.service.integration-spec.ts`, `channels.service.ts`'s own pre-existing collision-retry helper, etc.) — confirmed by running the full-project lint and diffing which files were pre-existing vs. new. Out of scope to fix here. All newly-written production/unit-test code in this SI (`videos.service.ts`, `videos.service.spec.ts`, plus the small edits to `channels.service.ts`/`domain.exception.ts`/`app.module.ts`) lints clean; `test/videos-create.e2e-spec.ts` still carries the same `no-unsafe-*` errors because it faithfully mirrors `test/auth.e2e-spec.ts`'s already-accepted supertest/`res.body` pattern rather than inventing a new one.
 
 ### SI-03.6 — Endpoints de conclusão e aborto do upload
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 8 passing (3 unit + 1 integration + 4 e2e)
+- **Observations:**
+  - `CompleteUploadDto.parts` is declared `@IsOptional()` rather than required — an empty/missing `parts` array must produce the domain `errorCode: "INVALID_UPLOAD_PARTS"` (400) per AC3, not the generic `VALIDATION_ERROR` the global `ValidationPipe` would emit for a failed `@ArrayNotEmpty()`. Same pattern as SI-03.5's `FILE_TOO_LARGE`: the ceiling/presence check is a business rule enforced in `VideosService`, not a `class-validator` constraint.
+  - `completeUpload`/`abortUpload` share a private `findDraftUploadOrThrow()` that checks existence (404 `VIDEO_NOT_FOUND`) then `status === 'draft'` (409 `UPLOAD_ALREADY_COMPLETED`) *before* touching storage — this ordering is deliberate: calling S3's `CompleteMultipartUpload`/`AbortMultipartUpload` a second time on an already-finalized session would itself throw a storage-side error, so the business-state check must short-circuit first (same fail-fast principle as SI-03.5's file-size check).
+  - `dto.upload_id !== video.upload_id` is also routed through `InvalidUploadPartsException` (no separate errorCode exists in the Error Catalog for an upload-id mismatch, and it fits the catalog's "inconsistent with the storage-side multipart session" wording for `INVALID_UPLOAD_PARTS`).
+  - Any error thrown by `StorageService.completeMultipartUpload` itself (e.g., MinIO rejecting mismatched/incomplete parts) is caught and converted to `InvalidUploadPartsException` rather than propagating as a 500 — this is the other half of AC3's "inconsistent" case, exercised structurally by the missing-parts scenario in this SI's tests since a genuine MinIO-level `InvalidPart` rejection isn't practical to construct deterministically in a test.
+  - Per the Authorization Matrix, both endpoints are owner-only, but ownership enforcement is explicitly deferred to SI-03.10 ("Guard de posse") per the Dependency Map — these endpoints are currently only JWT-protected (any authenticated user can act on any `publicId`), which is an intentional, temporary gap closed by SI-03.10, not an oversight. No AC in this SI requires a 401/403 test, confirming the scope split.
+  - `VideosService` now also depends on `QueueService` (for `publishVideoProcessingRequested`), so `VideosModule` gained a `QueueModule` import and the pre-existing `videos.service.spec.ts` unit test needed a `QueueService` mock added to its testing module — required to keep the already-passing SI-03.5 unit tests green, not new scope.
+  - The Integration test (`videos.service.integration-spec.ts`) exercises the full real chain end-to-end (real MinIO multipart create + presigned PUT + real ETag, real Postgres, real RabbitMQ consume via a short-lived channel mirroring `queue.service.integration-spec.ts`'s `receiveOne` helper) rather than mocking any collaborator, since the SI's Tests entry explicitly asks to prove the message "publica de fato na fila real (RabbitMQ)".
+  - The E2E "already completed" and "success" scenarios both drive a real MinIO multipart session through `POST /videos` + a real presigned-URL `PUT`, since a fake/never-created `upload_id` would make `StorageService.completeMultipartUpload` fail against real MinIO instead of exercising the intended business-rule path.
 
 ### SI-03.7 — Endpoint GET /videos/:publicId
 - **Status:** pending

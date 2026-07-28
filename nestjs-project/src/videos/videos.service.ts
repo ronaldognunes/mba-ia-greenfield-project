@@ -3,9 +3,16 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { nanoid } from 'nanoid';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { FileTooLargeException } from '../common/exceptions/domain.exception';
+import {
+  FileTooLargeException,
+  InvalidUploadPartsException,
+  UploadAlreadyCompletedException,
+  VideoNotFoundException,
+} from '../common/exceptions/domain.exception';
+import { QueueService } from '../queue/queue.service';
 import { STORAGE_DEFAULTS } from '../storage/storage.constants';
 import { StorageService } from '../storage/storage.service';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { Video } from './entities/video.entity';
 import {
@@ -39,6 +46,11 @@ export interface CreateDraftAndInitiateUploadResult {
   expires_at: string;
 }
 
+export interface CompleteUploadResult {
+  public_id: string;
+  status: 'processing';
+}
+
 @Injectable()
 export class VideosService {
   constructor(
@@ -46,6 +58,7 @@ export class VideosService {
     private readonly videoRepository: Repository<Video>,
     private readonly channelsService: ChannelsService,
     private readonly storageService: StorageService,
+    private readonly queueService: QueueService,
   ) {}
 
   async createDraftAndInitiateUpload(
@@ -95,6 +108,74 @@ export class VideosService {
         Date.now() + STORAGE_DEFAULTS.PRESIGNED_URL_EXPIRES_IN_SECONDS * 1000,
       ).toISOString(),
     };
+  }
+
+  async completeUpload(
+    publicId: string,
+    dto: CompleteUploadDto,
+  ): Promise<CompleteUploadResult> {
+    const video = await this.findDraftUploadOrThrow(publicId);
+
+    if (
+      !dto.parts ||
+      dto.parts.length === 0 ||
+      dto.upload_id !== video.upload_id
+    ) {
+      throw new InvalidUploadPartsException();
+    }
+
+    try {
+      await this.storageService.completeMultipartUpload(
+        video.storage_key!,
+        video.upload_id,
+        dto.parts.map((part) => ({
+          partNumber: part.part_number,
+          eTag: part.e_tag,
+        })),
+      );
+    } catch {
+      throw new InvalidUploadPartsException();
+    }
+
+    video.status = 'processing';
+    await this.videoRepository.save(video);
+
+    await this.queueService.publishVideoProcessingRequested({
+      videoId: video.id,
+      publicId: video.public_id,
+      storageKey: video.storage_key!,
+    });
+
+    return { public_id: video.public_id, status: 'processing' };
+  }
+
+  async abortUpload(publicId: string): Promise<void> {
+    const video = await this.findDraftUploadOrThrow(publicId);
+
+    await this.storageService.abortMultipartUpload(
+      video.storage_key!,
+      video.upload_id!,
+    );
+
+    await this.videoRepository.remove(video);
+  }
+
+  private async findDraftUploadOrThrow(publicId: string): Promise<Video> {
+    const video = await this.videoRepository.findOneBy({
+      public_id: publicId,
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    if (video.status !== 'draft') {
+      throw new UploadAlreadyCompletedException();
+    }
+    if (!video.storage_key || !video.upload_id) {
+      throw new Error(
+        `Video "${publicId}" is missing storage_key/upload_id required to finalize the upload`,
+      );
+    }
+    return video;
   }
 
   private async saveWithUniquePublicId(
