@@ -213,6 +213,3 @@ Detalhes completos em `docs/project-plan.md`.
 | Containerização | Docker, Docker Compose |
 | Testes | Jest, Supertest (backend); Vitest, MSW, Playwright (frontend) |
 | Qualidade | ESLint, Prettier |
-</content>
-#   m b a - i a - g r e e n f i e l d - p r o j e c t  
- 
