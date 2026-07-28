@@ -26,9 +26,7 @@ export const envValidationSchema = Joi.object({
   STORAGE_BUCKET: Joi.string().required(),
   STORAGE_ACCESS_KEY: Joi.string().required(),
   STORAGE_SECRET_KEY: Joi.string().required(),
-  STORAGE_FORCE_PATH_STYLE: Joi.string()
-    .valid('true', 'false')
-    .default('true'),
+  STORAGE_FORCE_PATH_STYLE: Joi.string().valid('true', 'false').default('true'),
   QUEUE_URL: Joi.string()
     .uri({ scheme: ['amqp', 'amqps'] })
     .required(),

@@ -1,0 +1,3 @@
+export const STORAGE_DEFAULTS = {
+  PRESIGNED_URL_EXPIRES_IN_SECONDS: 3600,
+} as const;
