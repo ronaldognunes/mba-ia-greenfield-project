@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 7/10 completed
+**SIs:** 8/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -85,9 +85,14 @@
   - `test/videos-detail.e2e-spec.ts` (JIT-authored from `specs/videos-detail.plan.md`) seeds videos directly via the repository in `ready`/`processing` status rather than driving a real upload flow, per the spec's own `Setup:` field — unlike SI-03.6's E2E tests, no real MinIO multipart session is needed here since `getPresignedGetUrl` is a pure local signing computation (no network round-trip to verify the object exists), so a fake `storage_key`/`thumbnail_key` string is sufficient. The same `no-unsafe-assignment`/`no-unsafe-member-access` errors on `res.body.xxx`/`.mailService` accesses that were judged as accepted convention in SI-03.5/03.6 recur here unchanged (7 instances, same category).
 
 ### SI-03.8 — Bootstrap do Video Worker
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 1 passing
+- **Observations:**
+  - Per TD-05 (Option B), `main.worker.ts` uses `NestFactory.createApplicationContext(WorkerModule)` — a standalone Nest application context with no HTTP listener, running as its own `worker` Compose service (already scaffolded in `compose.yaml` by SI-03.1, pointing at the then-nonexistent `Dockerfile.worker` created in this SI).
+  - `WorkerModule` deliberately does NOT import `VideosModule`/`AuthModule`/`ChannelsModule` — importing the full `VideosModule` would transitively drag in `AuthModule` (JWT) and `QueueModule` (producer-only), working against TD-05's explicit "keep the worker's module graph lean" concern. Instead it owns its own minimal `ConfigModule.forRoot()` + `TypeOrmModule.forRootAsync()` (mirroring `app.module.ts`'s factory almost verbatim — necessary duplication since this is a separate Node process/entrypoint, not a shared module graph) and directly registers only the entities it needs via `TypeOrmModule.forFeature(...)`, plus `StorageModule`. `queue.config.ts` is loaded into `ConfigModule` (per the SI's technical action) so SI-03.9's consumer logic can inject it, but no `QueueModule`/producer is wired here — this SI is bootstrap only.
+  - First test run failed with `TypeORMError: Entity metadata for Video#channel was not found` — `Video` has a `@ManyToOne` relation to `Channel`, and TypeORM's `autoLoadEntities` only discovers entities actually registered via some `forFeature()` in the loaded module graph; since `WorkerModule` only registered `Video`, the relation's other side was unresolvable. Fixed by also registering `Channel` in `forFeature(...)` — which in turn required `User` too, since `Channel` has a `@OneToOne` relation back to `User`. Final entity list: `[Video, Channel, User]`. This is a byproduct of the existing entity graph (all three entities already exist from phase-02/SI-03.2), not new modeling.
+  - `Dockerfile.worker` mirrors `Dockerfile.dev` (same base image, same `tail -f /dev/null` idle-until-manually-started pattern used by `nestjs-api`) plus `ffmpeg` installed via apt (TD-06 Option B — system FFmpeg, no `fluent-ffmpeg`/bundled-binary wrapper); the Debian `ffmpeg` package also provides `ffprobe`. Verified both binaries are present and runnable by building the image (`docker compose build worker`) and running `ffmpeg -version`/`ffprobe -version` inside a throwaway container — not part of the SI's automated Tests table (which only requires the `WorkerModule` DI-compilation unit test) but a direct check of this SI's own AC ("a imagem do worker contém os binários ffmpeg e ffprobe instalados").
+  - Added `worker:start` to `package.json` as `nest start --entryFile worker/main.worker --watch`, mirroring `start:dev`'s watch-mode pattern (per `nestjs-project/CLAUDE.md`'s "only start manually when asked" convention) rather than a one-shot `start:prod`-style script, since the SI only names one script and the worker container is expected to sit idle until explicitly started the same way `nestjs-api` is.
 
 ### SI-03.9 — Lógica de processamento do vídeo no worker
 - **Status:** pending
