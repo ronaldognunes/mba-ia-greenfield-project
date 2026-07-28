@@ -7,6 +7,8 @@ import {
   FileTooLargeException,
   InvalidUploadPartsException,
   UploadAlreadyCompletedException,
+  VideoAccessForbiddenException,
+  VideoAccessUnauthorizedException,
   VideoNotFoundException,
 } from '../common/exceptions/domain.exception';
 import { QueueService } from '../queue/queue.service';
@@ -14,7 +16,7 @@ import { STORAGE_DEFAULTS } from '../storage/storage.constants';
 import { StorageService } from '../storage/storage.service';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
-import { Video } from './entities/video.entity';
+import { Video, VideoStatus } from './entities/video.entity';
 import {
   buildOriginalStorageKey,
   VIDEO_UPLOAD_LIMITS,
@@ -50,6 +52,26 @@ export interface CompleteUploadResult {
   public_id: string;
   status: 'processing';
 }
+
+export interface VideoOwnerRepresentation {
+  public_id: string;
+  status: Exclude<VideoStatus, 'ready'>;
+  error: string | null;
+}
+
+export interface VideoPublicRepresentation {
+  public_id: string;
+  status: 'ready';
+  duration_seconds: number;
+  stream_url: string;
+  download_url: string;
+  thumbnail_url: string;
+  expires_at: string;
+}
+
+export type GetPublicRepresentationResult =
+  | VideoOwnerRepresentation
+  | VideoPublicRepresentation;
 
 @Injectable()
 export class VideosService {
@@ -158,6 +180,72 @@ export class VideosService {
     );
 
     await this.videoRepository.remove(video);
+  }
+
+  async getPublicRepresentation(
+    publicId: string,
+    requestingUserId?: string,
+  ): Promise<GetPublicRepresentationResult> {
+    const video = await this.videoRepository.findOneBy({
+      public_id: publicId,
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+
+    if (video.status === 'ready') {
+      return this.buildPublicRepresentation(video);
+    }
+
+    if (!requestingUserId) {
+      throw new VideoAccessUnauthorizedException();
+    }
+
+    const channel = await this.channelsService.findByUserId(requestingUserId);
+    if (!channel || channel.id !== video.channel_id) {
+      throw new VideoAccessForbiddenException();
+    }
+
+    const metadata = video.metadata as { error?: string } | null;
+    return {
+      public_id: video.public_id,
+      status: video.status,
+      error: video.status === 'failed' ? (metadata?.error ?? null) : null,
+    };
+  }
+
+  private async buildPublicRepresentation(
+    video: Video,
+  ): Promise<VideoPublicRepresentation> {
+    if (
+      !video.storage_key ||
+      !video.thumbnail_key ||
+      video.duration_seconds === null
+    ) {
+      throw new Error(
+        `Video "${video.public_id}" is ready but missing storage_key/thumbnail_key/duration_seconds`,
+      );
+    }
+
+    const [streamUrl, downloadUrl, thumbnailUrl] = await Promise.all([
+      this.storageService.getPresignedGetUrl(video.storage_key),
+      this.storageService.getPresignedGetUrl(video.storage_key, {
+        contentDisposition: 'attachment',
+      }),
+      this.storageService.getPresignedGetUrl(video.thumbnail_key),
+    ]);
+
+    return {
+      public_id: video.public_id,
+      status: 'ready',
+      duration_seconds: video.duration_seconds,
+      stream_url: streamUrl,
+      download_url: downloadUrl,
+      thumbnail_url: thumbnailUrl,
+      expires_at: new Date(
+        Date.now() + STORAGE_DEFAULTS.PRESIGNED_URL_EXPIRES_IN_SECONDS * 1000,
+      ).toISOString(),
+    };
   }
 
   private async findDraftUploadOrThrow(publicId: string): Promise<Video> {

@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -15,12 +17,15 @@ import {
 } from '@nestjs/swagger';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import type {
   CompleteUploadResult,
   CreateDraftAndInitiateUploadResult,
+  GetPublicRepresentationResult,
 } from './videos.service';
 import { VideosService } from './videos.service';
 
@@ -151,5 +156,53 @@ export class VideosController {
   })
   async abortUpload(@Param('publicId') publicId: string): Promise<void> {
     return this.videosService.abortUpload(publicId);
+  }
+
+  @Get(':publicId')
+  @Public()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Get a video by public id',
+    description:
+      'Returns presigned playback/download URLs once the video is ready (anonymous access allowed); while draft/processing/failed, only the owning channel may poll the status.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Video representation — owner status poll or public playback URLs once ready',
+    schema: {
+      properties: {
+        public_id: { type: 'string' },
+        status: { type: 'string' },
+        error: { type: 'string', nullable: true },
+        duration_seconds: { type: 'integer' },
+        stream_url: { type: 'string' },
+        download_url: { type: 'string' },
+        thumbnail_url: { type: 'string' },
+        expires_at: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Authentication is required to view this video',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The authenticated user is not the owning channel',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async getVideo(
+    @Param('publicId') publicId: string,
+    @CurrentUser() user: JwtPayload | undefined,
+  ): Promise<GetPublicRepresentationResult> {
+    return this.videosService.getPublicRepresentation(publicId, user?.sub);
   }
 }

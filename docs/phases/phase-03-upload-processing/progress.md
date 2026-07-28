@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 6/10 completed
+**SIs:** 7/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -71,9 +71,18 @@
   - The E2E "already completed" and "success" scenarios both drive a real MinIO multipart session through `POST /videos` + a real presigned-URL `PUT`, since a fake/never-created `upload_id` would make `StorageService.completeMultipartUpload` fail against real MinIO instead of exercising the intended business-rule path.
 
 ### SI-03.7 — Endpoint GET /videos/:publicId
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 12 passing (9 unit + 3 e2e)
+- **Observations:**
+  - `GET /videos/:publicId` needs three-way access (anonymous when `ready`, owner-only otherwise), but the app registers `JwtAuthGuard` globally (`APP_GUARD`) — every route requires a valid Bearer token unless `@Public()`. Marking the route `@Public()` alone would prevent the guard from ever decoding a token, so an authenticated owner would look identical to an anonymous caller. Added `OptionalJwtAuthGuard` (`src/auth/guards/optional-jwt-auth.guard.ts`, provided/exported by `AuthModule`) — same decode logic as `JwtAuthGuard` but never throws on a missing/invalid/expired token; it just proceeds without setting `request.user`. Route is `@Public()` + `@UseGuards(OptionalJwtAuthGuard)`.
+  - The actual "somente dono" branching (401 when no caller, 403 when caller ≠ owning channel) lives in `VideosService.getPublicRepresentation()`, per this SI's own Technical action 1 wording ("ramifica por status ... somente dono") — not in a guard, consistent with the layer-separation rule that guards handle infra (identifying the caller) while services own the business decision (is this caller allowed to see this video).
+  - Added two new domain exceptions, `VideoAccessUnauthorizedException` (401, `errorCode: "UNAUTHORIZED"`) and `VideoAccessForbiddenException` (403, `errorCode: "FORBIDDEN"`) — these exact literal codes are named in the API Contract's own error-responses line ("401 UNAUTHORIZED / 403 FORBIDDEN"), unlike every prior phase-02/03 401/403 which had a more specific catalog entry (`INVALID_CREDENTIALS`, `EMAIL_NOT_CONFIRMED`, etc.); no more specific code exists for this endpoint in the Error Catalog.
+  - This is necessary plumbing for SI-03.7's own ACs, not a preemption of SI-03.10 ("Guard de posse") — SI-03.10 builds a different, reusable `VideoOwnershipGuard` applied to the mutation endpoints (`POST /videos`, `upload-complete`, `upload-abort`, which currently have zero ownership enforcement) and, per its own Dependency Map, depends on SI-03.7 being done first. Some rework/consolidation there (e.g. folding `OptionalJwtAuthGuard`'s decode logic into the new guard) is expected and left to that SI.
+  - `VideoOwnerRepresentation.status` is typed `Exclude<VideoStatus, 'ready'>` rather than the full `VideoStatus` — since `getPublicRepresentation` always returns the `VideoPublicRepresentation` branch for `status: 'ready'`, this makes the `GetPublicRepresentationResult` union cleanly discriminable on `status` (TS can't narrow `'ready'` out of a branch whose field type already includes it), which is what let the unit test avoid an `expect.any(String)` inside a `.toEqual({...})` object literal — that pattern trips `@typescript-eslint/no-unsafe-assignment` (property-value context) even though the identical `expect.any(...)` as a bare `toHaveBeenCalledWith()` argument elsewhere in the codebase only trips the `no-unsafe-argument` warning.
+  - Since no transcoding happens (per TD-08 — progressive MP4 served via Range requests), `stream_url`/`download_url` are both presigned GETs on the same `video.storage_key` (the original upload), differing only by `response-content-disposition=attachment` on the download variant; `thumbnail_url` is a presigned GET on `video.thumbnail_key`. Both `thumbnail_key` and `duration_seconds` are only ever populated by the worker (SI-03.9, not yet built) — if a video is `ready` but either is still null, `buildPublicRepresentation` throws a generic `Error` (500), mirroring the "missing storage_key/upload_id" defensive-invariant pattern from SI-03.6's `findDraftUploadOrThrow`.
+  - `failed` status's `error` field is read from `video.metadata?.error` (cast via a local `{ error?: string } | null` type, not `any`) — `metadata` has no dedicated `error`-reason contract from any TD; this is inferred from the API Contract's `error: string, nullable — populated when status: failed` line, and how the worker actually populates it is SI-03.9's concern.
+  - `VideosModule` now imports `AuthModule` (for `OptionalJwtAuthGuard` + the `JwtService` it needs) — no circular dependency, since `AuthModule` only imports `UsersModule`/`MailModule`.
+  - `test/videos-detail.e2e-spec.ts` (JIT-authored from `specs/videos-detail.plan.md`) seeds videos directly via the repository in `ready`/`processing` status rather than driving a real upload flow, per the spec's own `Setup:` field — unlike SI-03.6's E2E tests, no real MinIO multipart session is needed here since `getPresignedGetUrl` is a pure local signing computation (no network round-trip to verify the object exists), so a fake `storage_key`/`thumbnail_key` string is sufficient. The same `no-unsafe-assignment`/`no-unsafe-member-access` errors on `res.body.xxx`/`.mailService` accesses that were judged as accepted convention in SI-03.5/03.6 recur here unchanged (7 instances, same category).
 
 ### SI-03.8 — Bootstrap do Video Worker
 - **Status:** pending

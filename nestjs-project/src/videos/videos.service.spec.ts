@@ -3,7 +3,12 @@ import { Test } from '@nestjs/testing';
 import { nanoid } from 'nanoid';
 import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { FileTooLargeException } from '../common/exceptions/domain.exception';
+import {
+  FileTooLargeException,
+  VideoAccessForbiddenException,
+  VideoAccessUnauthorizedException,
+  VideoNotFoundException,
+} from '../common/exceptions/domain.exception';
 import { QueueService } from '../queue/queue.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateVideoDto } from './dto/create-video.dto';
@@ -32,6 +37,7 @@ describe('VideosService', () => {
   const videoRepositoryMock = {
     create: jest.fn((data: Partial<Video>) => data as Video),
     save: jest.fn(),
+    findOneBy: jest.fn(),
   };
   const channelsServiceMock = { findByUserId: jest.fn() };
   const storageServiceMock = {
@@ -39,6 +45,7 @@ describe('VideosService', () => {
     getPresignedPartUrls: jest.fn(),
     completeMultipartUpload: jest.fn(),
     abortMultipartUpload: jest.fn(),
+    getPresignedGetUrl: jest.fn(),
   };
   const queueServiceMock = { publishVideoProcessingRequested: jest.fn() };
 
@@ -107,6 +114,116 @@ describe('VideosService', () => {
         service.createDraftAndInitiateUpload('user-1', dto),
       ).rejects.toThrow('connection lost');
       expect(videoRepositoryMock.save).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getPublicRepresentation', () => {
+    function makeVideo(overrides: Partial<Video> = {}): Video {
+      return {
+        public_id: 'vid-1',
+        channel_id: 'channel-1',
+        status: 'processing',
+        storage_key: 'videos/vid-1/original',
+        thumbnail_key: 'videos/vid-1/thumbnail.jpg',
+        duration_seconds: 120,
+        metadata: null,
+        ...overrides,
+      } as Video;
+    }
+
+    it('throws VideoNotFoundException when the video does not exist', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(null);
+
+      await expect(
+        service.getPublicRepresentation('missing-id'),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('returns presigned URLs for a ready video without requiring a caller', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(
+        makeVideo({ status: 'ready' }),
+      );
+      storageServiceMock.getPresignedGetUrl
+        .mockResolvedValueOnce('https://storage.example.com/stream')
+        .mockResolvedValueOnce('https://storage.example.com/download')
+        .mockResolvedValueOnce('https://storage.example.com/thumbnail');
+
+      const result = await service.getPublicRepresentation('vid-1');
+
+      if (result.status !== 'ready') {
+        throw new Error('expected a ready representation');
+      }
+      expect(result.public_id).toBe('vid-1');
+      expect(result.duration_seconds).toBe(120);
+      expect(result.stream_url).toBe('https://storage.example.com/stream');
+      expect(result.download_url).toBe('https://storage.example.com/download');
+      expect(result.thumbnail_url).toBe(
+        'https://storage.example.com/thumbnail',
+      );
+      expect(typeof result.expires_at).toBe('string');
+      expect(storageServiceMock.getPresignedGetUrl).toHaveBeenCalledTimes(3);
+      expect(channelsServiceMock.findByUserId).not.toHaveBeenCalled();
+    });
+
+    it('throws VideoAccessUnauthorizedException for a non-ready video with no caller', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(
+        makeVideo({ status: 'processing' }),
+      );
+
+      await expect(
+        service.getPublicRepresentation('vid-1'),
+      ).rejects.toBeInstanceOf(VideoAccessUnauthorizedException);
+    });
+
+    it('throws VideoAccessForbiddenException when the caller does not own the video', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(
+        makeVideo({ status: 'processing', channel_id: 'channel-1' }),
+      );
+      channelsServiceMock.findByUserId.mockResolvedValue({
+        id: 'channel-2',
+      });
+
+      await expect(
+        service.getPublicRepresentation('vid-1', 'user-2'),
+      ).rejects.toBeInstanceOf(VideoAccessForbiddenException);
+    });
+
+    it('returns the owner status representation for the owning caller', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(
+        makeVideo({ status: 'processing', channel_id: 'channel-1' }),
+      );
+      channelsServiceMock.findByUserId.mockResolvedValue({
+        id: 'channel-1',
+      });
+
+      const result = await service.getPublicRepresentation('vid-1', 'user-1');
+
+      expect(result).toEqual({
+        public_id: 'vid-1',
+        status: 'processing',
+        error: null,
+      });
+    });
+
+    it('surfaces the failure reason from metadata when status is failed', async () => {
+      videoRepositoryMock.findOneBy.mockResolvedValue(
+        makeVideo({
+          status: 'failed',
+          channel_id: 'channel-1',
+          metadata: { error: 'ffmpeg exited with code 1' },
+        }),
+      );
+      channelsServiceMock.findByUserId.mockResolvedValue({
+        id: 'channel-1',
+      });
+
+      const result = await service.getPublicRepresentation('vid-1', 'user-1');
+
+      expect(result).toEqual({
+        public_id: 'vid-1',
+        status: 'failed',
+        error: 'ffmpeg exited with code 1',
+      });
     });
   });
 });

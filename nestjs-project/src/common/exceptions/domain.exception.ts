@@ -80,3 +80,15 @@ export class InvalidUploadPartsException extends DomainException {
     );
   }
 }
+
+export class VideoAccessUnauthorizedException extends DomainException {
+  constructor() {
+    super('UNAUTHORIZED', 401, 'Authentication is required to view this video');
+  }
+}
+
+export class VideoAccessForbiddenException extends DomainException {
+  constructor() {
+    super('FORBIDDEN', 403, 'You do not have permission to view this video');
+  }
+}
