@@ -48,3 +48,9 @@ export class TokenReuseDetectedException extends DomainException {
     );
   }
 }
+
+export class FileTooLargeException extends DomainException {
+  constructor() {
+    super('FILE_TOO_LARGE', 413, 'File size exceeds the 10GB upload limit');
+  }
+}

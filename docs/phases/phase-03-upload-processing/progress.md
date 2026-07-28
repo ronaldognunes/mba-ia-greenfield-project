@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 4/10 completed
+**SIs:** 5/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -46,9 +46,16 @@
   - First test design reused one long-lived AMQP channel across all 3 tests (consume + cancel per assertion) and consistently hung at Jest's 5000ms timeout on the 2nd/3rd test — root-caused via WebSearch + reading `amqp-connection-manager`'s compiled source that repeated `consume()`/`cancel()` cycles on the same `ChannelWrapper` don't reliably re-arm; fixed by giving each assertion its own short-lived connection+channel (`receiveOne` helper), closed immediately after use — no flakiness since.
 
 ### SI-03.5 — Endpoint POST /videos (criação de rascunho + início do upload)
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 6 passing (3 unit + 3 e2e)
+- **Observations:**
+  - `**Test Specs:**` on SI-03.5/03.6/03.7 was `_pending /plan-test-specs_` (the plan is `test_specs_aware: true`) — per the `/implement` skill's hard-abort rule, ran `/plan-test-specs phase-03-upload-processing` before starting this SI, which generated `nestjs-project/specs/videos-{create,upload,detail}.plan.md` and populated the plan's placeholders. This produced the first E2E test file the project has needed to author from a spec (`test/videos-create.e2e-spec.ts`); `test/auth.e2e-spec.ts`, `test/app.e2e-spec.ts` and `test/swagger.e2e-spec.ts` already existed from phase-02, so the E2E bootstrap/auth-helper pattern was mirrored from `test/auth.e2e-spec.ts` rather than invented.
+  - VideosModule needed to resolve the authenticated caller's `channel_id` (Video's owning entity), which `ChannelsService` didn't expose yet (only `createChannel`). Added `ChannelsService.findByUserId()` — a minimal, single-purpose lookup — rather than querying the `Channel` repository directly from `VideosService`, keeping channel data access inside its own module per Single Responsibility.
+  - Technical action #4 said "Registrar VideosModule (importando StorageModule) em AppModule", naming only `StorageModule`; `VideosModule` also imports `ChannelsModule` (for the lookup above) since it's a direct, minimal dependency of action #2, not a scope expansion.
+  - AC2 ("file_size_bytes acima de 10GB retorna 413 FILE_TOO_LARGE") is deliberately NOT enforced via a `class-validator` `@Max()` on `CreateVideoDto` — that would produce a generic 400 through the global `ValidationPipe`, not the required 413/FILE_TOO_LARGE. Enforced instead as a business rule in `VideosService`, throwing a new `FileTooLargeException extends DomainException` (413), mapped by the already-registered global `DomainExceptionFilter` — same mechanism `phase-02-auth` established, no new filter needed.
+  - `public_id` retry-on-collision (TD-07) mirrors `ChannelsService.createChannel`'s existing unique-violation-retry pattern (`QueryFailedError` + Postgres code `23505`, `MAX_RETRIES` loop with a terminal throw) rather than introducing a different pattern — kept local/private to `VideosService` since the existing precedent also keeps its detection helper private to its own service, not shared.
+  - S3 part size (TD-04 only suggests "8–64MB parts", no exact number) and the multipart storage key format (`videos/{public_id}/original`) aren't specified by any TD — picked 16MB parts and a plain, extension-less key as reasonable defaults, documented in `videos.constants.ts`.
+  - Discovered the project's `npm run lint` has pre-existing failures (mostly `@typescript-eslint/no-unsafe-*` and `unbound-method`) across phase-02 files this SI never touched (`auth.e2e-spec.ts`, `auth.service.spec.ts`, `auth.service.integration-spec.ts`, `users.service.integration-spec.ts`, `channels.service.ts`'s own pre-existing collision-retry helper, etc.) — confirmed by running the full-project lint and diffing which files were pre-existing vs. new. Out of scope to fix here. All newly-written production/unit-test code in this SI (`videos.service.ts`, `videos.service.spec.ts`, plus the small edits to `channels.service.ts`/`domain.exception.ts`/`app.module.ts`) lints clean; `test/videos-create.e2e-spec.ts` still carries the same `no-unsafe-*` errors because it faithfully mirrors `test/auth.e2e-spec.ts`'s already-accepted supertest/`res.body` pattern rather than inventing a new one.
 
 ### SI-03.6 — Endpoints de conclusão e aborto do upload
 - **Status:** pending

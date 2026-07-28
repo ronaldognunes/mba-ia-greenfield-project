@@ -127,7 +127,7 @@ Entregar o pipeline de upload e processamento de vídeos da Fase 03 — serviço
 **Description:** Implementa o pré-cadastro automático do vídeo como rascunho e o início do upload multipart, conforme `### API Contracts`.
 
 **Route:** POST /videos
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-create.plan.md`
 
 **Technical actions:**
 
@@ -158,7 +158,7 @@ Entregar o pipeline de upload e processamento de vídeos da Fase 03 — serviço
 **Description:** Implementa a conclusão e o aborto do multipart upload, disparando o processamento assíncrono ao concluir.
 
 **Route:** POST /videos/:publicId/upload-complete, POST /videos/:publicId/upload-abort
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload.plan.md`
 
 **Technical actions:**
 
@@ -189,7 +189,7 @@ Entregar o pipeline de upload e processamento de vídeos da Fase 03 — serviço
 **Description:** Implementa a leitura do vídeo — polling de status para o dono enquanto não estiver pronto, e a representação pública de reprodução (streaming, download, thumbnail) uma vez `ready`.
 
 **Route:** GET /videos/:publicId
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-detail.plan.md`
 
 **Technical actions:**
 
