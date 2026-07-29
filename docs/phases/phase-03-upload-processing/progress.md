@@ -1,6 +1,6 @@
 # phase-03-upload-processing — Progress
 
-**Status:** in_progress
+**Status:** completed
 **SIs:** 10/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
