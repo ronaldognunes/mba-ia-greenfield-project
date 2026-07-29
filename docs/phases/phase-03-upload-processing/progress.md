@@ -1,7 +1,7 @@
 # phase-03-upload-processing — Progress
 
 **Status:** in_progress
-**SIs:** 9/10 completed
+**SIs:** 10/10 completed
 
 ### SI-03.1 — Instalar dependências, criar namespaces de configuração e atualizar o Compose
 - **Status:** completed
@@ -109,6 +109,13 @@
   - Hit a Windows/Git Bash path-mangling gotcha generating the fixture: Git Bash auto-converts Unix-looking absolute paths (`/home/node/app/...`) in command arguments to Windows paths before they reach `docker compose exec`, corrupting the in-container path. Worked around with `MSYS_NO_PATHCONV=1`.
 
 ### SI-03.10 — Guard de posse (ownership) dos endpoints de vídeo
-- **Status:** pending
-- **Tests:** no tests
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 9 passing (4 unit + 5 e2e)
+- **Observations:**
+  - `VideoOwnershipGuard` is a pure delegator per `nestjs-layer-separation.md`'s rule ("guards must delegate to a Service, not encode business logic") — it reads `request.params.publicId`/`request.user?.sub` and calls a new `VideosService.assertOwnershipOrPublicAccess(publicId, userId)` method, which owns the actual decision (bypass when `status: ready`, else require `channel_id` match).
+  - `assertOwnershipOrPublicAccess` was extracted from `getPublicRepresentation`'s existing inline ownership branch (added in SI-03.7) rather than duplicated — `getPublicRepresentation` now calls it internally too, so the same decision logic backs both the new guard and the existing read-status endpoint. This was a deliberate, low-risk refactor (observable behavior — same exceptions, same return shapes — is byte-identical to before), confirmed by re-running the pre-existing `videos.service.spec.ts` unit suite unchanged and green (9/9), per SI-03.7's own forward note that this consolidation was expected here.
+  - For `GET /videos/:publicId`, the guard runs *after* `OptionalJwtAuthGuard` in the same `@UseGuards(...)` array (order matters — `OptionalJwtAuthGuard` populates `request.user` when a valid token is present, without throwing when absent) and then re-checks ownership; `getPublicRepresentation` performs the identical check again once the controller method runs. This is intentional double-enforcement (same shared method, called from two layers) rather than full consolidation — kept the controller/service call signature unchanged to avoid touching SI-03.7's already-tested behavior further than the extraction itself required.
+  - Applied the guard to `POST /videos` too (per the SI's own technical action), even though there's no existing video to check ownership against at creation time — the guard's `if (!publicId) return true` branch makes this a structural no-op (no `:publicId` route param exists on that route), included for the reusability/consistency the technical action calls for, not because it changes `POST /videos`'s behavior.
+  - No new domain exception was needed — `VideoAccessForbiddenException` (403, `FORBIDDEN`) and `VideoAccessUnauthorizedException` (401, `UNAUTHORIZED`), both already added in SI-03.7, cover this SI's ACs; the Error Catalog has no more specific code for an ownership mismatch on the mutation endpoints either.
+  - New `test/videos-ownership.e2e-spec.ts` seeds a `draft`-status video directly via the repository (not through a real `POST /videos` flow) for the non-owner/403 cases, since the guard rejects before the controller/service ever reaches storage — no real MinIO multipart session is needed for those. The owner-success cases (200 on `upload-complete`, 204 on `upload-abort`, 201 on `POST /videos`) still drive the real flow (real multipart create + presigned PUT), mirroring SI-03.6's precedent, to prove the guard doesn't block the legitimate owner.
+  - Re-ran the three pre-existing e2e suites whose routes now carry the guard (`videos-create`, `videos-upload`, `videos-detail`) as a regression check, since this SI's changes touched shared controller/service code — all passed unchanged (3 + 4 + 3 tests), confirming no regression from adding the guard.

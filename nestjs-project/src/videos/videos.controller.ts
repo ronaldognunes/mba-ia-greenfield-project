@@ -22,6 +22,7 @@ import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
+import { VideoOwnershipGuard } from './guards/video-ownership.guard';
 import type {
   CompleteUploadResult,
   CreateDraftAndInitiateUploadResult,
@@ -36,6 +37,7 @@ export class VideosController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(VideoOwnershipGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Create a video draft and initiate upload',
@@ -87,6 +89,7 @@ export class VideosController {
 
   @Post(':publicId/upload-complete')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(VideoOwnershipGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Complete a video upload',
@@ -114,6 +117,11 @@ export class VideosController {
     schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
   })
   @ApiResponse({
+    status: 403,
+    description: 'The authenticated user is not the owning channel',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
     status: 404,
     description: 'Video not found',
     schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
@@ -132,6 +140,7 @@ export class VideosController {
 
   @Post(':publicId/upload-abort')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(VideoOwnershipGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Abort a video upload',
@@ -142,6 +151,11 @@ export class VideosController {
   @ApiResponse({
     status: 401,
     description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The authenticated user is not the owning channel',
     schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
   })
   @ApiResponse({
@@ -160,7 +174,7 @@ export class VideosController {
 
   @Get(':publicId')
   @Public()
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(OptionalJwtAuthGuard, VideoOwnershipGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Get a video by public id',

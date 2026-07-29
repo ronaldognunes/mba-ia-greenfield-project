@@ -186,6 +186,27 @@ export class VideosService {
     publicId: string,
     requestingUserId?: string,
   ): Promise<GetPublicRepresentationResult> {
+    const video = await this.assertOwnershipOrPublicAccess(
+      publicId,
+      requestingUserId,
+    );
+
+    if (video.status === 'ready') {
+      return this.buildPublicRepresentation(video);
+    }
+
+    const metadata = video.metadata as { error?: string } | null;
+    return {
+      public_id: video.public_id,
+      status: video.status,
+      error: video.status === 'failed' ? (metadata?.error ?? null) : null,
+    };
+  }
+
+  async assertOwnershipOrPublicAccess(
+    publicId: string,
+    requestingUserId?: string,
+  ): Promise<Video> {
     const video = await this.videoRepository.findOneBy({
       public_id: publicId,
     });
@@ -194,7 +215,7 @@ export class VideosService {
     }
 
     if (video.status === 'ready') {
-      return this.buildPublicRepresentation(video);
+      return video;
     }
 
     if (!requestingUserId) {
@@ -206,12 +227,7 @@ export class VideosService {
       throw new VideoAccessForbiddenException();
     }
 
-    const metadata = video.metadata as { error?: string } | null;
-    return {
-      public_id: video.public_id,
-      status: video.status,
-      error: video.status === 'failed' ? (metadata?.error ?? null) : null,
-    };
+    return video;
   }
 
   private async buildPublicRepresentation(
