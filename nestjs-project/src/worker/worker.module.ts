@@ -9,6 +9,7 @@ import storageConfig from '../config/storage.config';
 import { StorageModule } from '../storage/storage.module';
 import { User } from '../users/entities/user.entity';
 import { Video } from '../videos/entities/video.entity';
+import { VideoProcessorConsumer } from './video-processor.consumer';
 
 @Module({
   imports: [
@@ -35,5 +36,6 @@ import { Video } from '../videos/entities/video.entity';
     TypeOrmModule.forFeature([Video, Channel, User]),
     StorageModule,
   ],
+  providers: [VideoProcessorConsumer],
 })
 export class WorkerModule {}

@@ -21,7 +21,7 @@ const FIXED_THUMBNAIL_TIMESTAMP = '00:00:01';
 
 interface ProbeResult {
   durationSeconds: number;
-  metadata: Record<string, unknown>;
+  metadata: Record<string, any>;
 }
 
 @Injectable()
@@ -94,19 +94,23 @@ export class VideoProcessorConsumer implements OnModuleInit, OnModuleDestroy {
     const thumbnailKey = `videos/${payload.publicId}/thumbnail.jpg`;
     await this.uploadThumbnail(thumbnailKey, thumbnailBuffer);
 
-    await this.videoRepository.update(payload.videoId, {
-      status: 'ready',
-      duration_seconds: Math.round(durationSeconds),
-      metadata,
-      thumbnail_key: thumbnailKey,
+    const video = await this.videoRepository.findOneByOrFail({
+      id: payload.videoId,
     });
+    video.status = 'ready';
+    video.duration_seconds = Math.round(durationSeconds);
+    video.metadata = metadata;
+    video.thumbnail_key = thumbnailKey;
+    await this.videoRepository.save(video);
   }
 
   private async markFailed(videoId: string, error: Error): Promise<void> {
-    await this.videoRepository.update(videoId, {
-      status: 'failed',
-      metadata: { error: error.message },
+    const video = await this.videoRepository.findOneByOrFail({
+      id: videoId,
     });
+    video.status = 'failed';
+    video.metadata = { error: error.message };
+    await this.videoRepository.save(video);
   }
 
   private async uploadThumbnail(key: string, body: Buffer): Promise<void> {
@@ -119,7 +123,10 @@ export class VideoProcessorConsumer implements OnModuleInit, OnModuleDestroy {
       uploadId,
       1,
     );
-    const response = await fetch(part.url, { method: 'PUT', body });
+    const response = await fetch(part.url, {
+      method: 'PUT',
+      body: body as unknown as BodyInit,
+    });
     const eTag = response.headers.get('etag');
     if (!response.ok || !eTag) {
       throw new Error(`Failed to upload thumbnail to storage key "${key}"`);
@@ -139,7 +146,7 @@ export class VideoProcessorConsumer implements OnModuleInit, OnModuleDestroy {
     ]);
     const parsed = JSON.parse(stdout.toString()) as {
       format?: { duration?: string };
-    };
+    } & Record<string, any>;
     const durationSeconds = Number(parsed.format?.duration);
     if (!Number.isFinite(durationSeconds)) {
       throw new Error('ffprobe did not report a valid duration');
