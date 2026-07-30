@@ -13,8 +13,10 @@ docker compose ps   # all services must show status "running"
 Then verify each infrastructure service is actually ready to accept connections — not just running:
 
 - **PostgreSQL:** `docker compose exec db pg_isready -U streamtube` — expect `accepting connections`
+- **MinIO:** `docker compose exec minio mc ready local` — expect success (mirrors the compose healthcheck)
+- **RabbitMQ:** `docker compose exec rabbitmq rabbitmq-diagnostics -q ping` — expect `Ping succeeded`
 
-Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment".
+Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment". The same applies to the video worker (`npm run worker:start`, see "Video Worker" below) — start it only when explicitly asked.
 
 ## Development Environment
 
@@ -34,6 +36,10 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP test server, port `1025` (SMTP), `8025` (web UI)
+- `minio` — S3-compatible object storage for video files/thumbnails, port `9000` (API), `9001` (console), user/password `streamtube`
+- `rabbitmq` — video processing job queue, port `5672` (AMQP), `15672` (management UI), user/password `streamtube`
+- `worker` — standalone video processing worker (ffmpeg/ffprobe), no exposed port — see "Video Worker" below
 
 All verification and teardown commands run on the **host machine**:
 
@@ -93,13 +99,31 @@ docker compose exec nestjs-api npm run test:e2e   # already configured
 
 Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
 
+`storage.service.integration-spec.ts`, `queue.service.integration-spec.ts`, and `video-processor.consumer.integration-spec.ts` hit the real `minio` and `rabbitmq` services (not mocks) — make sure those containers are up and healthy (see "Environment Startup Verification") before running the integration suite.
+
 During active development, run only the tests related to the file being changed (`npm test -- path/to/file.spec.ts`). Before declaring a task done, run the full suite — see the global `CLAUDE.md` → "Definition of Done (Technical)".
 
 ## Long-running Processes
 
 Commands that never exit (dev server, watch modes) must be run in background in the Bash tool — otherwise the agent blocks indefinitely waiting for the process to return.
 
-This applies to: `start:dev`, `start:prod`, `test:watch`, and any other persistent process.
+This applies to: `start:dev`, `start:prod`, `worker:start`, `test:watch`, and any other persistent process.
+
+## Video Worker
+
+Video processing (metadata extraction via `ffprobe`, thumbnail extraction via `ffmpeg`) runs in a **separate standalone process**, not inside `nestjs-api` — per the C4 diagram, the Video Worker is its own container with its own image.
+
+- **Image:** built from `Dockerfile.worker` (not `Dockerfile.dev`) — Node base image plus `ffmpeg`/`ffprobe` installed via `apt`
+- **Bootstrap:** `src/worker/main.worker.ts` creates a standalone Nest application context (no HTTP listener) from `src/worker/worker.module.ts`
+- **Entrypoint:** `npm run worker:start` (`nest start --entryFile worker/main.worker --watch`)
+- **Data access:** the worker connects **directly** to PostgreSQL via `TypeOrmModule`, importing the `Video`/`Channel`/`User` entities from their domain modules, and writes `status`/`duration_seconds`/`metadata`/`thumbnail_key` straight to the `videos` table — it never calls the API over HTTP
+- The `worker` compose service idles on `tail -f /dev/null`, so the process must be started explicitly:
+
+```bash
+docker compose exec worker npm run worker:start
+```
+
+`QueueService` (API) and `VideoProcessorConsumer` (worker) each independently assert the same RabbitMQ topology (main queue + dead-letter exchange/queue) on `onModuleInit`. This duplication is intentional, not drift — the two run in separate module graphs as separate processes, and either one may connect first, so both must idempotently declare the same topology.
 
 ## Test Type Selection
 
@@ -148,6 +172,7 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+- Infrastructure clients are wrapped in their own module (`StorageModule` around the S3/MinIO client, `QueueModule` around the RabbitMQ connection) rather than folded into a domain module — domain services (e.g., `VideosService`) inject and call them, never touch the underlying client (`S3Client`, `amqp-connection-manager`) directly
 
 ## Code Conventions
 
